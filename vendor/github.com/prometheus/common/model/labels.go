@@ -45,6 +45,14 @@ const (
 	// scrape a target.
 	MetricsPathLabel = "__metrics_path__"
 
+	// ScrapeIntervalLabel is the name of the label that holds the scrape interval
+	// used to scrape a target.
+	ScrapeIntervalLabel = "__scrape_interval__"
+
+	// ScrapeTimeoutLabel is the name of the label that holds the scrape
+	// timeout used to scrape a target.
+	ScrapeTimeoutLabel = "__scrape_timeout__"
+
 	// ReservedLabelPrefix is a prefix which is not legal in user-supplied
 	// label names.
 	ReservedLabelPrefix = "__"
@@ -80,22 +88,34 @@ const (
 	QuantileLabel = "quantile"
 )
 
-// LabelNameRE is a regular expression matching valid label names.
+// LabelNameRE is a regular expression matching valid label names. Note that the
+// IsValid method of LabelName performs the same check but faster than a match
+// with this regular expression.
 var LabelNameRE = regexp.MustCompile("^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 // A LabelName is a key for a LabelSet or Metric.  It has a value associated
 // therewith.
 type LabelName string
 
-// IsValid is true iff the label name matches the pattern of LabelNameRE.
+// IsValid returns true iff name matches the pattern of LabelNameRE for legacy
+// names, and iff it's valid UTF-8 if NameValidationScheme is set to
+// UTF8Validation. For the legacy matching, it does not use LabelNameRE for the
+// check but a much faster hardcoded implementation.
 func (ln LabelName) IsValid() bool {
 	if len(ln) == 0 {
 		return false
 	}
-	for i, b := range ln {
-		if !((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || b == '_' || (b >= '0' && b <= '9' && i > 0)) {
-			return false
+	switch NameValidationScheme {
+	case LegacyValidation:
+		for i, b := range ln {
+			if !((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || b == '_' || (b >= '0' && b <= '9' && i > 0)) {
+				return false
+			}
 		}
+	case UTF8Validation:
+		return utf8.ValidString(string(ln))
+	default:
+		panic(fmt.Sprintf("Invalid name validation scheme requested: %d", NameValidationScheme))
 	}
 	return true
 }
@@ -106,7 +126,7 @@ func (ln *LabelName) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	if err := unmarshal(&s); err != nil {
 		return err
 	}
-	if !LabelNameRE.MatchString(s) {
+	if !LabelName(s).IsValid() {
 		return fmt.Errorf("%q is not a valid label name", s)
 	}
 	*ln = LabelName(s)
@@ -119,7 +139,7 @@ func (ln *LabelName) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &s); err != nil {
 		return err
 	}
-	if !LabelNameRE.MatchString(s) {
+	if !LabelName(s).IsValid() {
 		return fmt.Errorf("%q is not a valid label name", s)
 	}
 	*ln = LabelName(s)
@@ -152,7 +172,7 @@ func (l LabelNames) String() string {
 // A LabelValue is an associated value for a LabelName.
 type LabelValue string
 
-// IsValid returns true iff the string is a valid UTF8.
+// IsValid returns true iff the string is a valid UTF-8.
 func (lv LabelValue) IsValid() bool {
 	return utf8.ValidString(string(lv))
 }

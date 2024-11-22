@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"regexp"
 	"time"
-	"unicode/utf8"
 )
 
 // Matcher describes a matches the value of a given label.
@@ -54,14 +53,14 @@ func (m *Matcher) Validate() error {
 		if _, err := regexp.Compile(m.Value); err != nil {
 			return fmt.Errorf("invalid regular expression %q", m.Value)
 		}
-	} else if !utf8.ValidString(m.Value) || len(m.Value) == 0 {
+	} else if !LabelValue(m.Value).IsValid() || len(m.Value) == 0 {
 		return fmt.Errorf("invalid value %q", m.Value)
 	}
 	return nil
 }
 
-// Silence defines the representation of a silence definiton
-// in the Prometheus eco-system.
+// Silence defines the representation of a silence definition in the Prometheus
+// eco-system.
 type Silence struct {
 	ID uint64 `json:"id,omitempty"`
 
@@ -82,7 +81,7 @@ func (s *Silence) Validate() error {
 	}
 	for _, m := range s.Matchers {
 		if err := m.Validate(); err != nil {
-			return fmt.Errorf("invalid matcher: %s", err)
+			return fmt.Errorf("invalid matcher: %w", err)
 		}
 	}
 	if s.StartsAt.IsZero() {

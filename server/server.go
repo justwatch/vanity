@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"text/template"
 
-	"github.com/go-kit/kit/log"
+	"github.com/go-kit/log"
 )
 
 var metaTemplate = template.Must(template.New("meta").Parse(`
@@ -47,7 +47,7 @@ func New(cfg Config) *Server {
 
 // ServeHTTP will serve http
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Server", "github.com/dominikschulz/vanity")
+	w.Header().Set("Server", "github.com/justwatch/vanity")
 
 	if r.URL.Path == "/healthz" {
 		http.Error(w, "Alive", http.StatusOK)
@@ -60,7 +60,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.FormValue("go-get") != "1" {
-		http.Redirect(w, r, "http://godoc.org/"+host+r.URL.Path, http.StatusFound)
+		http.Redirect(w, r, "http://godoc.org/"+host+r.URL.Path, http.StatusFound) // Need to modify this line to point to github.com/justwatch/ + the path (or part of it)
 		return
 	}
 
@@ -78,7 +78,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // host and port.
 func (s *Server) lookup(host string, path string) ([]Import, error) {
 	if h, found := s.hosts[host]; found {
-		i, err := h.getImport(host + path)
+		i, err := h.GetImport(host + path)
 		if err != nil {
 			return []Import{}, err
 		}

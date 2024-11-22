@@ -1,13 +1,12 @@
 package main
 
 import (
-	"io/ioutil"
 	"os"
 
 	"gopkg.in/yaml.v2"
 
-	"github.com/dominikschulz/vanity/server"
-	"github.com/go-kit/kit/log"
+	"github.com/go-kit/log"
+	"github.com/justwatch/vanity/server"
 )
 
 const defaultConfig = `
@@ -33,7 +32,7 @@ func loadConfiguration(l log.Logger, cfgFile string) (Config, error) {
 
 	if _, err := os.Stat(cfgFile); err == nil {
 		l.Log("level", "debug", "msg", "Loading config", "source", cfgFile)
-		buf, err = ioutil.ReadFile(cfgFile)
+		buf, err = os.ReadFile(cfgFile)
 		if err != nil {
 			l.Log("level", "error", "msg", "Could not load config", "source", cfgFile)
 			buf = []byte(defaultConfig)
