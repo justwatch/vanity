@@ -1,4 +1,4 @@
-FROM golang:1.23-alpine3.18 as builder
+FROM golang:1.23-alpine3.20 AS builder
 
 ADD . /go/src/github.com/justwatch/vanity
 WORKDIR /go/src/github.com/justwatch/vanity
