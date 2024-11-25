@@ -14,18 +14,22 @@
 package prometheus
 
 import (
+	"errors"
+	"math"
+	"sort"
 	"strings"
+	"time"
 
 	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/common/model"
+	"google.golang.org/protobuf/proto"
 )
 
-const separatorByte byte = 255
+var separatorByteSlice = []byte{model.SeparatorByte} // For convenient use with xxhash.
 
 // A Metric models a single sample value with its meta data being exported to
-// Prometheus. Implementers of Metric in this package inclued Gauge, Counter,
-// Untyped, and Summary. Users can implement their own Metric types, but that
-// should be rarely needed. See the example for SelfCollector, which is also an
-// example for a user-implemented Metric.
+// Prometheus. Implementations of Metric in this package are Gauge, Counter,
+// Histogram, Summary, and Untyped.
 type Metric interface {
 	// Desc returns the descriptor for the Metric. This method idempotently
 	// returns the same descriptor throughout the lifetime of the
@@ -36,29 +40,31 @@ type Metric interface {
 	// Write encodes the Metric into a "Metric" Protocol Buffer data
 	// transmission object.
 	//
-	// Implementers of custom Metric types must observe concurrency safety
-	// as reads of this metric may occur at any time, and any blocking
-	// occurs at the expense of total performance of rendering all
-	// registered metrics. Ideally Metric implementations should support
-	// concurrent readers.
+	// Metric implementations must observe concurrency safety as reads of
+	// this metric may occur at any time, and any blocking occurs at the
+	// expense of total performance of rendering all registered
+	// metrics. Ideally, Metric implementations should support concurrent
+	// readers.
 	//
-	// The Prometheus client library attempts to minimize memory allocations
-	// and will provide a pre-existing reset dto.Metric pointer. Prometheus
-	// may recycle the dto.Metric proto message, so Metric implementations
-	// should just populate the provided dto.Metric and then should not keep
-	// any reference to it.
-	//
-	// While populating dto.Metric, labels must be sorted lexicographically.
-	// (Implementers may find LabelPairSorter useful for that.)
+	// While populating dto.Metric, it is the responsibility of the
+	// implementation to ensure validity of the Metric protobuf (like valid
+	// UTF-8 strings or syntactically valid metric and label names). It is
+	// recommended to sort labels lexicographically. Callers of Write should
+	// still make sure of sorting if they depend on it.
 	Write(*dto.Metric) error
+	// TODO(beorn7): The original rationale of passing in a pre-allocated
+	// dto.Metric protobuf to save allocations has disappeared. The
+	// signature of this method should be changed to "Write() (*dto.Metric,
+	// error)".
 }
 
 // Opts bundles the options for creating most Metric types. Each metric
-// implementation XXX has its own XXXOpts type, but in most cases, it is just be
+// implementation XXX has its own XXXOpts type, but in most cases, it is just
 // an alias of this type (which might change when the requirement arises.)
 //
-// It is mandatory to set Name and Help to a non-empty string. All other fields
-// are optional and can safely be left at their zero value.
+// It is mandatory to set Name to a non-empty string. All other fields are
+// optional and can safely be left at their zero value, although it is strongly
+// encouraged to set a Help string.
 type Opts struct {
 	// Namespace, Subsystem, and Name are components of the fully-qualified
 	// name of the Metric (created by joining these components with
@@ -69,7 +75,7 @@ type Opts struct {
 	Subsystem string
 	Name      string
 
-	// Help provides information about this metric. Mandatory!
+	// Help provides information about this metric.
 	//
 	// Metrics with the same fully-qualified name must have the same Help
 	// string.
@@ -79,21 +85,16 @@ type Opts struct {
 	// with the same fully-qualified name must have the same label names in
 	// their ConstLabels.
 	//
-	// Note that in most cases, labels have a value that varies during the
-	// lifetime of a process. Those labels are usually managed with a metric
-	// vector collector (like CounterVec, GaugeVec, UntypedVec). ConstLabels
-	// serve only special purposes. One is for the special case where the
-	// value of a label does not change during the lifetime of a process,
-	// e.g. if the revision of the running binary is put into a
-	// label. Another, more advanced purpose is if more than one Collector
-	// needs to collect Metrics with the same fully-qualified name. In that
-	// case, those Metrics must differ in the values of their
-	// ConstLabels. See the Collector examples.
-	//
-	// If the value of a label never changes (not even between binaries),
-	// that label most likely should not be a label at all (but part of the
-	// metric name).
+	// ConstLabels are only used rarely. In particular, do not use them to
+	// attach the same labels to all your metrics. Those use cases are
+	// better covered by target labels set by the scraping Prometheus
+	// server, or by one specific metric (e.g. a build_info or a
+	// machine_role metric). See also
+	// https://prometheus.io/docs/instrumenting/writing_exporters/#target-labels-not-static-scraped-labels
 	ConstLabels Labels
+
+	// now is for testing purposes, by default it's time.Now.
+	now func() time.Time
 }
 
 // BuildFQName joins the given three name components by "_". Empty name
@@ -118,37 +119,6 @@ func BuildFQName(namespace, subsystem, name string) string {
 	return name
 }
 
-// LabelPairSorter implements sort.Interface. It is used to sort a slice of
-// dto.LabelPair pointers. This is useful for implementing the Write method of
-// custom metrics.
-type LabelPairSorter []*dto.LabelPair
-
-func (s LabelPairSorter) Len() int {
-	return len(s)
-}
-
-func (s LabelPairSorter) Swap(i, j int) {
-	s[i], s[j] = s[j], s[i]
-}
-
-func (s LabelPairSorter) Less(i, j int) bool {
-	return s[i].GetName() < s[j].GetName()
-}
-
-type hashSorter []uint64
-
-func (s hashSorter) Len() int {
-	return len(s)
-}
-
-func (s hashSorter) Swap(i, j int) {
-	s[i], s[j] = s[j], s[i]
-}
-
-func (s hashSorter) Less(i, j int) bool {
-	return s[i] < s[j]
-}
-
 type invalidMetric struct {
 	desc *Desc
 	err  error
@@ -164,3 +134,124 @@ func NewInvalidMetric(desc *Desc, err error) Metric {
 func (m *invalidMetric) Desc() *Desc { return m.desc }
 
 func (m *invalidMetric) Write(*dto.Metric) error { return m.err }
+
+type timestampedMetric struct {
+	Metric
+	t time.Time
+}
+
+func (m timestampedMetric) Write(pb *dto.Metric) error {
+	e := m.Metric.Write(pb)
+	pb.TimestampMs = proto.Int64(m.t.Unix()*1000 + int64(m.t.Nanosecond()/1000000))
+	return e
+}
+
+// NewMetricWithTimestamp returns a new Metric wrapping the provided Metric in a
+// way that it has an explicit timestamp set to the provided Time. This is only
+// useful in rare cases as the timestamp of a Prometheus metric should usually
+// be set by the Prometheus server during scraping. Exceptions include mirroring
+// metrics with given timestamps from other metric
+// sources.
+//
+// NewMetricWithTimestamp works best with MustNewConstMetric,
+// MustNewConstHistogram, and MustNewConstSummary, see example.
+//
+// Currently, the exposition formats used by Prometheus are limited to
+// millisecond resolution. Thus, the provided time will be rounded down to the
+// next full millisecond value.
+func NewMetricWithTimestamp(t time.Time, m Metric) Metric {
+	return timestampedMetric{Metric: m, t: t}
+}
+
+type withExemplarsMetric struct {
+	Metric
+
+	exemplars []*dto.Exemplar
+}
+
+func (m *withExemplarsMetric) Write(pb *dto.Metric) error {
+	if err := m.Metric.Write(pb); err != nil {
+		return err
+	}
+
+	switch {
+	case pb.Counter != nil:
+		pb.Counter.Exemplar = m.exemplars[len(m.exemplars)-1]
+	case pb.Histogram != nil:
+		for _, e := range m.exemplars {
+			// pb.Histogram.Bucket are sorted by UpperBound.
+			i := sort.Search(len(pb.Histogram.Bucket), func(i int) bool {
+				return pb.Histogram.Bucket[i].GetUpperBound() >= e.GetValue()
+			})
+			if i < len(pb.Histogram.Bucket) {
+				pb.Histogram.Bucket[i].Exemplar = e
+			} else {
+				// The +Inf bucket should be explicitly added if there is an exemplar for it, similar to non-const histogram logic in https://github.com/prometheus/client_golang/blob/main/prometheus/histogram.go#L357-L365.
+				b := &dto.Bucket{
+					CumulativeCount: proto.Uint64(pb.Histogram.GetSampleCount()),
+					UpperBound:      proto.Float64(math.Inf(1)),
+					Exemplar:        e,
+				}
+				pb.Histogram.Bucket = append(pb.Histogram.Bucket, b)
+			}
+		}
+	default:
+		// TODO(bwplotka): Implement Gauge?
+		return errors.New("cannot inject exemplar into Gauge, Summary or Untyped")
+	}
+
+	return nil
+}
+
+// Exemplar is easier to use, user-facing representation of *dto.Exemplar.
+type Exemplar struct {
+	Value  float64
+	Labels Labels
+	// Optional.
+	// Default value (time.Time{}) indicates its empty, which should be
+	// understood as time.Now() time at the moment of creation of metric.
+	Timestamp time.Time
+}
+
+// NewMetricWithExemplars returns a new Metric wrapping the provided Metric with given
+// exemplars. Exemplars are validated.
+//
+// Only last applicable exemplar is injected from the list.
+// For example for Counter it means last exemplar is injected.
+// For Histogram, it means last applicable exemplar for each bucket is injected.
+//
+// NewMetricWithExemplars works best with MustNewConstMetric and
+// MustNewConstHistogram, see example.
+func NewMetricWithExemplars(m Metric, exemplars ...Exemplar) (Metric, error) {
+	if len(exemplars) == 0 {
+		return nil, errors.New("no exemplar was passed for NewMetricWithExemplars")
+	}
+
+	var (
+		now = time.Now()
+		exs = make([]*dto.Exemplar, len(exemplars))
+		err error
+	)
+	for i, e := range exemplars {
+		ts := e.Timestamp
+		if ts.IsZero() {
+			ts = now
+		}
+		exs[i], err = newExemplar(e.Value, ts, e.Labels)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &withExemplarsMetric{Metric: m, exemplars: exs}, nil
+}
+
+// MustNewMetricWithExemplars is a version of NewMetricWithExemplars that panics where
+// NewMetricWithExemplars would have returned an error.
+func MustNewMetricWithExemplars(m Metric, exemplars ...Exemplar) Metric {
+	ret, err := NewMetricWithExemplars(m, exemplars...)
+	if err != nil {
+		panic(err)
+	}
+	return ret
+}

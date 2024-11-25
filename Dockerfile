@@ -1,11 +1,11 @@
-FROM golang:1.8-alpine3.6 as builder
+FROM golang:1.23-alpine3.20 AS builder
 
-ADD . /go/src/github.com/dominikschulz/vanity
-WORKDIR /go/src/github.com/dominikschulz/vanity
+ADD . /go/src/github.com/justwatch/vanity
+WORKDIR /go/src/github.com/justwatch/vanity
 
 RUN go install
 
-FROM alpine:3.6
+FROM alpine:3.18
 
 COPY --from=builder /go/bin/vanity /usr/local/bin/vanity
 CMD [ "/usr/local/bin/vanity" ]

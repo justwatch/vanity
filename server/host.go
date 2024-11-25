@@ -11,23 +11,23 @@ type Host struct {
 	Defaults []Import `yaml:"defaults"`
 }
 
-// getImport will retrieve or generate the import for a given repo
-func (h *Host) getImport(repo string) (Import, error) {
+// GetImport will retrieve or generate the import for a given repo
+func (h *Host) GetImport(repo string) (Import, error) {
 	for _, i := range h.Imports {
 		if strings.HasPrefix(repo, i.Prefix) {
 			return i, nil
 		}
 	}
-	i, err := h.genImport(repo)
+	i, err := h.GenImport(repo)
 	if err != nil {
 		return Import{}, err
 	}
 	return i, nil
 }
 
-// genImport will try to generate an imports definition given an
+// GenImport will try to generate an imports definition given an
 // repo prefix based on our set of defaults defintions.
-func (h *Host) genImport(repo string) (Import, error) {
+func (h *Host) GenImport(repo string) (Import, error) {
 	var pkg string
 	var matchingDefault Import
 

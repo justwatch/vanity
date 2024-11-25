@@ -8,9 +8,9 @@ import (
 
 	_ "net/http/pprof"
 
-	"github.com/dominikschulz/vanity/server"
-	"github.com/go-kit/kit/log"
-	"github.com/prometheus/client_golang/prometheus"
+	"github.com/go-kit/log"
+	"github.com/justwatch/vanity/server"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -39,7 +39,7 @@ func main() {
 
 	go handleSigs()
 	go func() {
-		http.Handle("/metrics", prometheus.Handler())
+		http.Handle("/metrics", promhttp.Handler())
 		http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "OK", http.StatusOK)
 		})
@@ -51,7 +51,7 @@ func main() {
 
 	s := &http.Server{
 		Addr:    listen,
-		Handler: prometheus.InstrumentHandler("vanity", srv),
+		Handler: srv, // Removed prometheus handler. Do we really care?
 	}
 	if err := s.ListenAndServe(); err != nil {
 		logger.Log("level", "error", "msg", "Failed to listen", "err", err)

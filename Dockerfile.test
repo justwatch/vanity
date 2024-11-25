@@ -29,8 +29,8 @@ RUN update-ca-certificates
 
 WORKDIR $GOPATH
 
-ADD . /go/src/github.com/dominikschulz/vanity
-WORKDIR /go/src/github.com/dominikschulz/vanity
+ADD . /go/src/github.com/justwatch/vanity
+WORKDIR /go/src/github.com/justwatch/vanity
 
 RUN make install
 
